@@ -15,6 +15,8 @@ STATIC_ROOT = os.environ.get("STATIC_ROOT", os.path.join(ROOT, "htdocs"))
 async def handle_rtp_data(websocket, data: bytes, arrival_time_ms: int) -> None:
     await websocket.send_bytes(data)
 
+async def handle_rtcp_data(websocket, data: bytes) -> None:
+    await websocket.send_bytes(data)
 
 class Endpoint(WebSocketEndpoint):
     encoding = "json"
@@ -35,6 +37,7 @@ class Endpoint(WebSocketEndpoint):
         for transceiver in pc.getTransceivers():
             transport = transceiver.receiver.transport
             transport._handle_rtp_data = functools.partial(handle_rtp_data, websocket)
+            transport._handle_rtcp_data = functools.partial(handle_rtcp_data, websocket)
 
         # create answer
         answer = await pc.createAnswer()

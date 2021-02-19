@@ -1,56 +1,52 @@
 <html>
 <head>
     <meta charset="UTF-8"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="timeout" content="long"/>
     <title>WebRTC WPT demo</title>
-    <style>
-    button {
-        padding: 8px 16px;
-    }
-
-    pre {
-        overflow-x: hidden;
-        overflow-y: auto;
-    }
-
-    .option {
-        margin-bottom: 8px;
-    }
-    </style>
+    <script src="https://wpt.live/resources/testharness.js"></script>
+    <script src="https://wpt.live/resources/testharnessreport.js"></script>
+    <script src="lib.js"></script>
 </head>
 <body>
+<script>
+promise_test(async (t) => {
+    const pc = new RTCPeerConnection();
+    t.add_cleanup(() => pc.close());
 
-<h2>Options</h2>
-<div class="option">
-    <input id="use-stun" type="checkbox"/>
-    <label for="use-stun">Use STUN server</label>
-</div>
+    const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: true
+    });
+    t.add_cleanup(() => stream.getTracks().forEach(t => t.close()));
+    stream.getTracks().forEach((track) => {
+        pc.addTrack(track, stream);
+    });
 
-<button id="start" onclick="start()">Start</button>
-<button id="stop" style="display: none" onclick="stop()">Stop</button>
+    const ws = await connect(pc);
+    t.add_cleanup(() => ws.close());
 
-<h2>State</h2>
-<p>
-    ICE gathering state: <span id="ice-gathering-state"></span>
-</p>
-<p>
-    ICE connection state: <span id="ice-connection-state"></span>
-</p>
-<p>
-    Signaling state: <span id="signaling-state"></span>
-</p>
+    // Wait for a video frame. The last packet in the frame will have the marker bit set.
+    // Note that this doesn't deal well with conditions like missing last packets, however
+    // waiting for a timestamp change requires waiting a bit longer. This is just an example :-)
+    const frame = await (new Promise((resolve) => {
+        const buffer = [];
+        ws.addEventListener('message', function listener(message) {
+            if (isRTCP(message.data)) {
+                return;
+            }
+            const rtpData = new RTP(message.data);
+            buffer.push(rtpData);
+            if (rtpData.marker) {
+                resolve(buffer);
+                ws.removeEventListener('message', listener);
+            }
+        });
+    }));
+    // Run some assertions such as trying to reassemble a frame.
+    // Or just print a table.
+    console.table(frame);
+}, 'aiortc is cool');
 
-<h2>SDP</h2>
-
-<h3>Offer</h3>
-<pre id="offer-sdp"></pre>
-
-<h3>Answer</h3>
-<pre id="answer-sdp"></pre>
-
-<h2>RTP</h2>
-<pre id="rtp"></pre>
-
-<script src="client.js"></script>
+</script>
 </body>
 </html>

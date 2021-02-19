@@ -17,7 +17,7 @@ promise_test(async (t) => {
         audio: false,
         video: true
     });
-    t.add_cleanup(() => stream.getTracks().forEach(t => t.close()));
+    t.add_cleanup(() => stream.getTracks().forEach(t => t.stop()));
     stream.getTracks().forEach((track) => {
         pc.addTrack(track, stream);
     });
@@ -37,8 +37,8 @@ promise_test(async (t) => {
             const rtpData = new RTP(message.data);
             buffer.push(rtpData);
             if (rtpData.marker) {
-                resolve(buffer);
                 ws.removeEventListener('message', listener);
+                resolve(buffer);
             }
         });
     }));

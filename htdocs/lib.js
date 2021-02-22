@@ -7,6 +7,7 @@ async function connect(pc) {
     await (new Promise((resolve) => {
         ws.addEventListener('open', resolve);
     }))
+
     await pc.setLocalDescription();
     // wait for ICE gathering to complete
     await (new Promise((resolve) => {
@@ -22,15 +23,40 @@ async function connect(pc) {
         }
     }));
     const offer = pc.localDescription;
-    ws.send(JSON.stringify(offer));
+    const sections = SDPUtils.splitSections(offer.sdp);
+    const dtls = SDPUtils.getDtlsParameters(sections[1], sections[0]);
+    const ice = SDPUtils.getIceParameters(sections[1], sections[0]);
+    const candidates = SDPUtils.matchPrefix(sections[1], 'a=candidate:')
+        .map(l => l.substr(2));
+    ws.send(JSON.stringify({
+        ice,
+        dtls,
+        candidates,
+    }));
 
-    const answer = await (new Promise((resolve) => {
+    const parameters = await (new Promise((resolve) => {
         ws.addEventListener('message', function listener(message) {
             ws.removeEventListener('message', listener);
             resolve(JSON.parse(message.data))
         });
     }));
-    await pc.setRemoteDescription(answer);
+
+    let sdp = 'v=0\r\n' +
+        'o=- 166855176514521964 2 IN IP4 127.0.0.1\r\n' +
+        's=-\r\n' +
+        't=0 0\r\n' +
+        'm=video 9 UDP/TLS/RTP/SAVPF 100\r\n' +
+        'c=IN IP4 0.0.0.0\r\n' +
+        'a=rtcp:9 IN IP4 0.0.0.0\r\n' +
+        'a=mid:0\r\n' +
+        'a=sendrecv\r\n' +
+        'a=rtcp-mux\r\n' +
+        'a=rtcp-rsize\r\n' +
+        'a=rtpmap:100 VP8/90000\r\n';
+    sdp += SDPUtils.writeDtlsParameters(parameters.dtls, 'active');
+    sdp += SDPUtils.writeIceParameters(parameters.ice);
+    parameters.candidates.forEach(c => sdp += 'a=' + c + '\r\n');
+    await pc.setRemoteDescription({type: 'answer', sdp});
     return ws;
 }
 

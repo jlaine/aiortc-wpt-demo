@@ -1,7 +1,17 @@
+import asyncio
 import functools
 import os
 
-from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc import (
+    RTCCertificate,
+    RTCDtlsFingerprint,
+    RTCDtlsParameters,
+    RTCDtlsTransport,
+    RTCIceGatherer,
+    RTCIceParameters,
+    RTCIceTransport,
+)
+from aiortc.sdp import candidate_from_sdp, candidate_to_sdp
 from starlette.applications import Starlette
 from starlette.endpoints import WebSocketEndpoint
 from starlette.routing import Mount, WebSocketRoute
@@ -23,34 +33,83 @@ class Endpoint(WebSocketEndpoint):
     encoding = "json"
 
     async def on_connect(self, websocket):
-        websocket.state.pc = RTCPeerConnection()
+        gatherer = RTCIceGatherer(iceServers=[])
+        websocket.state.iceTransport = RTCIceTransport(gatherer)
+        certificate = RTCCertificate.generateCertificate()
+        websocket.state.dtlsTransport = RTCDtlsTransport(
+            websocket.state.iceTransport, [certificate]
+        )
+
+        # monkey-patch RTCDtlsTransport
+        websocket.state.dtlsTransport._handle_rtp_data = functools.partial(
+            handle_rtp_data, websocket
+        )
+        websocket.state.dtlsTransport._handle_rtcp_data = functools.partial(
+            handle_rtcp_data, websocket
+        )
 
         await websocket.accept()
 
     async def on_receive(self, websocket, message):
-        pc = websocket.state.pc
-        offer = RTCSessionDescription(sdp=message["sdp"], type=message["type"])
+        iceParameters = websocket.state.iceTransport.iceGatherer.getLocalParameters()
+        dtlsParameters = websocket.state.dtlsTransport.getLocalParameters()
 
-        # handle offer
-        await pc.setRemoteDescription(offer)
+        coros = map(
+            websocket.state.iceTransport.addRemoteCandidate,
+            map(candidate_from_sdp, message["candidates"]),
+        )
+        await asyncio.gather(*coros)
 
-        # monkey-patch RTCDtlsTransport
-        for transceiver in pc.getTransceivers():
-            transport = transceiver.receiver.transport
-            transport._handle_rtp_data = functools.partial(handle_rtp_data, websocket)
-            transport._handle_rtcp_data = functools.partial(handle_rtcp_data, websocket)
-
-        # create answer
-        answer = await pc.createAnswer()
-        await pc.setLocalDescription(answer)
-
-        # send answer
         await websocket.send_json(
-            {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+            {
+                "ice": {
+                    "usernameFragment": iceParameters.usernameFragment,
+                    "password": iceParameters.password,
+                },
+                "dtls": {
+                    "role": "auto",
+                    "fingerprints": list(
+                        map(
+                            lambda fp: {"algorithm": fp.algorithm, "value": fp.value},
+                            dtlsParameters.fingerprints,
+                        )
+                    ),
+                },
+                "candidates": list(
+                    map(
+                        lambda c: "candidate:" + candidate_to_sdp(c),
+                        websocket.state.iceTransport.iceGatherer.getLocalCandidates(),
+                    )
+                ),
+            }
         )
 
+        remoteIceParameters = RTCIceParameters(
+            usernameFragment=message["ice"]["usernameFragment"],
+            password=message["ice"]["password"],
+        )
+        remoteDtlsParameters = RTCDtlsParameters(
+            fingerprints=list(
+                map(
+                    lambda fp: RTCDtlsFingerprint(
+                        algorithm=fp["algorithm"], value=fp["value"]
+                    ),
+                    message["dtls"]["fingerprints"],
+                )
+            )
+        )
+
+        gatherer = websocket.state.iceTransport.iceGatherer
+        await gatherer.gather()
+
+        websocket.state.iceTransport._connection.ice_controlling = False
+
+        await websocket.state.iceTransport.start(remoteIceParameters)
+        await websocket.state.dtlsTransport.start(remoteDtlsParameters)
+
     async def on_disconnect(self, websocket, close_code):
-        await websocket.state.pc.close()
+        await websocket.state.dtlsTransport.stop()
+        await websocket.state.iceTransport.stop()
 
 
 app = Starlette(

@@ -1,12 +1,11 @@
 import functools
 import os
 
+from aiortc import RTCPeerConnection, RTCSessionDescription
 from starlette.applications import Starlette
 from starlette.endpoints import WebSocketEndpoint
 from starlette.routing import Mount, WebSocketRoute
 from starlette.staticfiles import StaticFiles
-
-from aiortc import RTCPeerConnection, RTCSessionDescription
 
 ROOT = os.path.dirname(__file__)
 STATIC_ROOT = os.environ.get("STATIC_ROOT", os.path.join(ROOT, "htdocs"))
@@ -15,8 +14,10 @@ STATIC_ROOT = os.environ.get("STATIC_ROOT", os.path.join(ROOT, "htdocs"))
 async def handle_rtp_data(websocket, data: bytes, arrival_time_ms: int) -> None:
     await websocket.send_bytes(data)
 
+
 async def handle_rtcp_data(websocket, data: bytes) -> None:
     await websocket.send_bytes(data)
+
 
 class Endpoint(WebSocketEndpoint):
     encoding = "json"

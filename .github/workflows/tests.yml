@@ -1,0 +1,20 @@
+name: tests
+
+on: [push, pull_request]
+
+jobs:
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-python@v1
+        with:
+          python-version: 3.9
+      - name: Install packages
+        run: pip install black flake8 isort
+      - name: Run linters
+        run: |
+          flake8 demo.py
+          isort --check-only --diff demo.py
+          black --check --diff demo.py

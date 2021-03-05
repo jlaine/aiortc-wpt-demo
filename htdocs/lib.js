@@ -58,6 +58,14 @@ async function connect(pc) {
     sdp += SDPUtils.writeDtlsParameters(parameters.dtls, 'active');
     sdp += SDPUtils.writeIceParameters(parameters.ice);
     parameters.candidates.forEach(c => sdp += 'a=' + c + '\r\n');
+
+    if (SDPUtils.matchPrefix(offer.sdp, 'a=simulcast:').length) {
+        // Simulcast offer, pretend there is an answer.
+        const simulcastLine = SDPUtils.matchPrefix(offer.sdp, 'a=simulcast:')[0];
+        sdp += 'a=simulcast:recv ' + simulcastLine.split(' ')[1] + '\r\n';
+        sdp += SDPUtils.matchPrefix(offer.sdp, 'a=rid:').join('\r\n') + '\r\n';
+        sdp += SDPUtils.matchPrefix(offer.sdp, 'a=extmap:').join('\r\n') + '\r\n';
+    }
     await pc.setRemoteDescription({type: 'answer', sdp});
     return ws;
 }

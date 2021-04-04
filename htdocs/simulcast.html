@@ -52,8 +52,11 @@ promise_test(async (t) => {
         sendEncodings: rids.map(rid => ({rid})),
     });
 
-    const ws = await connect(pc);
-    t.add_cleanup(() => ws.close());
+    const helper = new WebRTCHelper(pc);
+    t.add_cleanup(() => helper.cleanup());
+
+    const ws = await helper.connect();
+    await helper.offer();
 
     await Promise.all(rids.map(rid => waitForRid(ws, rid)));
 }, 'simulcast sends packet with RID extension');
@@ -72,9 +75,11 @@ promise_test(async (t) => {
         streams: [stream],
         sendEncodings: rids.map(rid => ({rid})),
     });
+    const helper = new WebRTCHelper(pc);
+    t.add_cleanup(() => helper.cleanup());
 
-    const ws = await connect(pc);
-    t.add_cleanup(() => ws.close());
+    const ws = await helper.connect();
+    await helper.offer();
 
     const packet = new RTP(await waitForRid(ws, 'l'));
     const firstByte = packet.payload.getUint8(0);

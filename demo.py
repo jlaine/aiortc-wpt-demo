@@ -50,45 +50,49 @@ class Endpoint(WebSocketEndpoint):
 
         await websocket.accept()
 
+        iceTransport = websocket.state.iceTransport
+        iceParameters = iceTransport.iceGatherer.getLocalParameters()
+        dtlsTransport = websocket.state.dtlsTransport
+        dtlsParameters = dtlsTransport.getLocalParameters()
+
+        await iceTransport.iceGatherer.gather()
+        await websocket.send_json(
+            {
+                "ice": {
+                    "usernameFragment": iceParameters.usernameFragment,
+                    "password": iceParameters.password,
+                },
+                "dtls": {
+                    "role": "auto",
+                    "fingerprints": list(
+                        map(
+                            lambda fp: {
+                                "algorithm": fp.algorithm,
+                                "value": fp.value,
+                            },
+                            dtlsParameters.fingerprints,
+                        )
+                    ),
+                },
+                "candidates": list(
+                    map(
+                        lambda c: "candidate:" + candidate_to_sdp(c),
+                        iceTransport.iceGatherer.getLocalCandidates(),
+                    )
+                ),
+            }
+        )
+
     async def on_receive(self, websocket, message):
         if self.encoding == "json":
             iceTransport = websocket.state.iceTransport
-            iceParameters = iceTransport.iceGatherer.getLocalParameters()
             dtlsTransport = websocket.state.dtlsTransport
-            dtlsParameters = dtlsTransport.getLocalParameters()
 
             coros = map(
                 iceTransport.addRemoteCandidate,
                 map(candidate_from_sdp, message["candidates"]),
             )
             await asyncio.gather(*coros)
-
-            await websocket.send_json(
-                {
-                    "ice": {
-                        "usernameFragment": iceParameters.usernameFragment,
-                        "password": iceParameters.password,
-                    },
-                    "dtls": {
-                        "role": "auto",
-                        "fingerprints": list(
-                            map(
-                                lambda fp: {
-                                    "algorithm": fp.algorithm,
-                                    "value": fp.value,
-                                },
-                                dtlsParameters.fingerprints,
-                            )
-                        ),
-                    },
-                    "candidates": list(
-                        map(
-                            lambda c: "candidate:" + candidate_to_sdp(c),
-                            iceTransport.iceGatherer.getLocalCandidates(),
-                        )
-                    ),
-                }
-            )
 
             remoteIceParameters = RTCIceParameters(
                 usernameFragment=message["ice"]["usernameFragment"],
@@ -104,8 +108,6 @@ class Endpoint(WebSocketEndpoint):
                     )
                 )
             )
-
-            await iceTransport.iceGatherer.gather()
 
             iceTransport._connection.ice_controlling = False
 

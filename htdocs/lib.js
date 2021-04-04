@@ -1,73 +1,124 @@
-// Helper function to connect to the echo endpoint
-async function connect(pc) {
-    const {protocol} = window.location;
-    const ws = new WebSocket((protocol === 'http:' ? 'ws:' : 'wss:') + window.location.origin.substring(protocol.length) + '/ws');
-    ws.binaryType = 'arraybuffer';
-
-    await (new Promise((resolve) => {
-        ws.addEventListener('open', resolve);
-    }))
-
-    await pc.setLocalDescription();
-    // wait for ICE gathering to complete
-    await (new Promise((resolve) => {
-        if (pc.iceGatheringState === 'complete') {
-            resolve();
-        } else {
-            pc.addEventListener('icegatheringstatechange', function listener() {
-                if (pc.iceGatheringState === 'complete') {
-                    pc.removeEventListener('icegatheringstatechange', listener);
-                    resolve();
-                }
-            });
-        }
-    }));
-    const offer = pc.localDescription;
-    const sections = SDPUtils.splitSections(offer.sdp);
-    const dtls = SDPUtils.getDtlsParameters(sections[1], sections[0]);
-    const ice = SDPUtils.getIceParameters(sections[1], sections[0]);
-    const candidates = SDPUtils.matchPrefix(sections[1], 'a=candidate:')
-        .map(l => l.substr(2));
-    ws.send(JSON.stringify({
-        ice,
-        dtls,
-        candidates,
-    }));
-
-    const parameters = await (new Promise((resolve) => {
-        ws.addEventListener('message', function listener(message) {
-            ws.removeEventListener('message', listener);
-            resolve(JSON.parse(message.data))
-        });
-    }));
-
-    let sdp = 'v=0\r\n' +
-        'o=- 166855176514521964 2 IN IP4 127.0.0.1\r\n' +
-        's=-\r\n' +
-        't=0 0\r\n' +
-        'm=video 9 UDP/TLS/RTP/SAVPF 100 101\r\n' +
-        'c=IN IP4 0.0.0.0\r\n' +
-        'a=rtcp:9 IN IP4 0.0.0.0\r\n' +
-        'a=mid:0\r\n' +
-        'a=sendrecv\r\n' +
-        'a=rtcp-mux\r\n' +
-        'a=rtcp-rsize\r\n' +
-        'a=rtpmap:100 VP8/90000\r\n' +
-        'a=rtpmap:101 rtx/90000\r\n' +
-        'a=fmtp:101 apt=100\r\n';
-    sdp += SDPUtils.writeDtlsParameters(parameters.dtls, 'active');
-    sdp += SDPUtils.writeIceParameters(parameters.ice);
-    parameters.candidates.forEach(c => sdp += 'a=' + c + '\r\n');
-
-    if (SDPUtils.matchPrefix(offer.sdp, 'a=simulcast:').length) {
-        // Simulcast offer, pretend there is an answer.
-        const simulcastLine = SDPUtils.matchPrefix(offer.sdp, 'a=simulcast:')[0];
-        sdp += 'a=simulcast:recv ' + simulcastLine.split(' ')[1] + '\r\n';
-        sdp += SDPUtils.matchPrefix(offer.sdp, 'a=rid:').join('\r\n') + '\r\n';
-        sdp += SDPUtils.matchPrefix(offer.sdp, 'a=extmap:').join('\r\n') + '\r\n';
+class WebRTCHelper {
+    constructor(pc) {
+        this.pc = pc;
     }
-    await pc.setRemoteDescription({type: 'answer', sdp});
-    return ws;
+
+    cleanup() {
+        if (this.ws) {
+            this.ws.close();
+        }
+    }
+
+    // Helper function to connect to the echo endpoint
+    async connect() {
+        const {protocol} = window.location;
+        this.ws = new WebSocket((protocol === 'http:' ? 'ws:' : 'wss:') + window.location.origin.substring(protocol.length) + '/ws');
+        this.ws.binaryType = 'arraybuffer';
+
+        await (new Promise((resolve) => {
+            this.ws.addEventListener('open', resolve);
+        }))
+        this.remoteParametersPromise = new Promise((resolve) => {
+            const ws = this.ws;
+            this.ws.addEventListener('message', function listener(message) {
+                ws.removeEventListener('message', listener);
+                resolve(JSON.parse(message.data))
+            });
+        });
+        return this.ws;
+    }
+    
+    async getRemoteParameters() {
+        return await this.remoteParametersPromise;
+    }
+    
+    // Create an offer, send it and negotiate with a default SDP.
+    async offer() {
+        await this.pc.setLocalDescription();
+        // wait for ICE gathering to complete
+        await (new Promise((resolve) => {
+            if (this.pc.iceGatheringState === 'complete') {
+                resolve();
+            } else {
+                const pc = this.pc;
+                this.pc.addEventListener('icegatheringstatechange', function listener() {
+                    if (pc.iceGatheringState === 'complete') {
+                        pc.removeEventListener('icegatheringstatechange', listener);
+                        resolve();
+                    }
+                });
+            }
+        }));
+        const offer = this.pc.localDescription;
+        const sections = SDPUtils.splitSections(offer.sdp);
+        const dtls = SDPUtils.getDtlsParameters(sections[1], sections[0]);
+        const ice = SDPUtils.getIceParameters(sections[1], sections[0]);
+        const candidates = SDPUtils.matchPrefix(sections[1], 'a=candidate:')
+            .map(l => l.substr(2));
+        this.ws.send(JSON.stringify({
+            ice,
+            dtls,
+            candidates,
+        }));
+
+        const parameters = await this.remoteParametersPromise;
+        let sdp = 'v=0\r\n' +
+            'o=- 166855176514521964 2 IN IP4 127.0.0.1\r\n' +
+            's=-\r\n' +
+            't=0 0\r\n' +
+            'm=video 9 UDP/TLS/RTP/SAVPF 100 101\r\n' +
+            'c=IN IP4 0.0.0.0\r\n' +
+            'a=rtcp:9 IN IP4 0.0.0.0\r\n' +
+            'a=mid:0\r\n' +
+            'a=sendrecv\r\n' +
+            'a=rtcp-mux\r\n' +
+            'a=rtcp-rsize\r\n' +
+            'a=rtpmap:100 VP8/90000\r\n' +
+            'a=rtpmap:101 rtx/90000\r\n' +
+            'a=fmtp:101 apt=100\r\n';
+        sdp += SDPUtils.writeDtlsParameters(parameters.dtls, 'active');
+        sdp += SDPUtils.writeIceParameters(parameters.ice);
+        parameters.candidates.forEach(c => sdp += 'a=' + c + '\r\n');
+
+        if (SDPUtils.matchPrefix(offer.sdp, 'a=simulcast:').length) {
+            // Simulcast offer, pretend there is an answer.
+            const simulcastLine = SDPUtils.matchPrefix(offer.sdp, 'a=simulcast:')[0];
+            sdp += 'a=simulcast:recv ' + simulcastLine.split(' ')[1] + '\r\n';
+            sdp += SDPUtils.matchPrefix(offer.sdp, 'a=rid:').join('\r\n') + '\r\n';
+            sdp += SDPUtils.matchPrefix(offer.sdp, 'a=extmap:').join('\r\n') + '\r\n';
+        }
+        await this.pc.setRemoteDescription({type: 'answer', sdp});
+    }
+
+    async answer(offerSdp) {
+        await this.pc.setRemoteDescription({type: 'offer', sdp: offerSdp});
+        await this.pc.setLocalDescription();
+        // wait for ICE gathering to complete
+        await (new Promise((resolve) => {
+            if (this.pc.iceGatheringState === 'complete') {
+                resolve();
+            } else {
+                const pc = this.pc;
+                this.pc.addEventListener('icegatheringstatechange', function listener() {
+                    if (pc.iceGatheringState === 'complete') {
+                        pc.removeEventListener('icegatheringstatechange', listener);
+                        resolve();
+                    }
+                });
+            }
+        }));
+        const answer = this.pc.localDescription;
+        const sections = SDPUtils.splitSections(answer.sdp);
+        const dtls = SDPUtils.getDtlsParameters(sections[1], sections[0]);
+        const ice = SDPUtils.getIceParameters(sections[1], sections[0]);
+        const candidates = SDPUtils.matchPrefix(sections[1], 'a=candidate:')
+            .map(l => l.substr(2));
+        this.ws.send(JSON.stringify({
+            ice,
+            dtls,
+            candidates,
+        }));
+    }
 }
 
 // Determine if a packet is an RTCP packet.

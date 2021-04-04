@@ -22,9 +22,11 @@ promise_test(async (t) => {
     stream.getTracks().forEach((track) => {
         pc.addTrack(track, stream);
     });
+    const helper = new WebRTCHelper(pc);
+    t.add_cleanup(() => helper.cleanup());
 
-    const ws = await connect(pc);
-    t.add_cleanup(() => ws.close());
+    const ws = await helper.connect();
+    await helper.offer();
 
     // Wait for a video frame. The last packet in the frame will have the marker bit set.
     // Note that this doesn't deal well with conditions like missing last packets, however
@@ -38,7 +40,7 @@ promise_test(async (t) => {
             const rtpData = new RTP(message.data);
             buffer.push(rtpData);
             if (rtpData.marker) {
-                ws.removeEventListener('message', listener);
+                helper.ws.removeEventListener('message', listener);
                 resolve(buffer);
             }
         });

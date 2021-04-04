@@ -23,8 +23,29 @@ promise_test(async (t) => {
         pc.addTrack(track, stream);
     });
 
-    const ws = await connect(pc);
-    t.add_cleanup(() => ws.close());
+    const helper = new WebRTCHelper(pc);
+    t.add_cleanup(() => helper.cleanup());
+    const ws = await helper.connect();
+
+    const parameters = await helper.getRemoteParameters();
+    let sdp = 'v=0\r\n' +
+        'o=- 166855176514521964 2 IN IP4 127.0.0.1\r\n' +
+        's=-\r\n' +
+        't=0 0\r\n' +
+        'm=video 9 UDP/TLS/RTP/SAVPF 100 101\r\n' +
+        'c=IN IP4 0.0.0.0\r\n' +
+        'a=rtcp:9 IN IP4 0.0.0.0\r\n' +
+        'a=mid:0\r\n' +
+        'a=sendrecv\r\n' +
+        'a=rtcp-mux\r\n' +
+        'a=rtcp-rsize\r\n' +
+        'a=rtpmap:100 VP8/90000\r\n' +
+        'a=rtpmap:101 rtx/90000\r\n' +
+        'a=fmtp:101 apt=100\r\n';
+    sdp += SDPUtils.writeDtlsParameters(parameters.dtls, 'actpass');
+    sdp += SDPUtils.writeIceParameters(parameters.ice);
+    parameters.candidates.forEach(c => sdp += 'a=' + c + '\r\n');
+    await helper.answer(sdp);
 
     // Wait for the first non-padding RTP packet.
     const packet =  await (new Promise((resolve) => {
@@ -73,6 +94,7 @@ promise_test(async (t) => {
             // https://tools.ietf.org/html/rfc4588#section-4
             const osn = rtpData.payload.getUint16(0);
             if (osn === packet.sequenceNumber) {
+                ws.removeEventListener('message', listener);
                 resolve();
             }
         });
@@ -91,7 +113,7 @@ promise_test(async (t) => {
         }
     });
     assert_equals(nackCount, 1, 'nackCount shows received NACK');
-}, 'NACK behaviour');
+}, 'NACK behaviour with RTX');
 </script>
 </body>
 </html>

@@ -51,61 +51,71 @@ class Endpoint(WebSocketEndpoint):
         await websocket.accept()
 
     async def on_receive(self, websocket, message):
-        iceParameters = websocket.state.iceTransport.iceGatherer.getLocalParameters()
-        dtlsParameters = websocket.state.dtlsTransport.getLocalParameters()
+        if self.encoding == "json":
+            iceTransport = websocket.state.iceTransport
+            iceParameters = iceTransport.iceGatherer.getLocalParameters()
+            dtlsTransport = websocket.state.dtlsTransport
+            dtlsParameters = dtlsTransport.getLocalParameters()
 
-        coros = map(
-            websocket.state.iceTransport.addRemoteCandidate,
-            map(candidate_from_sdp, message["candidates"]),
-        )
-        await asyncio.gather(*coros)
+            coros = map(
+                iceTransport.addRemoteCandidate,
+                map(candidate_from_sdp, message["candidates"]),
+            )
+            await asyncio.gather(*coros)
 
-        await websocket.send_json(
-            {
-                "ice": {
-                    "usernameFragment": iceParameters.usernameFragment,
-                    "password": iceParameters.password,
-                },
-                "dtls": {
-                    "role": "auto",
-                    "fingerprints": list(
+            await websocket.send_json(
+                {
+                    "ice": {
+                        "usernameFragment": iceParameters.usernameFragment,
+                        "password": iceParameters.password,
+                    },
+                    "dtls": {
+                        "role": "auto",
+                        "fingerprints": list(
+                            map(
+                                lambda fp: {
+                                    "algorithm": fp.algorithm,
+                                    "value": fp.value,
+                                },
+                                dtlsParameters.fingerprints,
+                            )
+                        ),
+                    },
+                    "candidates": list(
                         map(
-                            lambda fp: {"algorithm": fp.algorithm, "value": fp.value},
-                            dtlsParameters.fingerprints,
+                            lambda c: "candidate:" + candidate_to_sdp(c),
+                            iceTransport.iceGatherer.getLocalCandidates(),
                         )
                     ),
-                },
-                "candidates": list(
-                    map(
-                        lambda c: "candidate:" + candidate_to_sdp(c),
-                        websocket.state.iceTransport.iceGatherer.getLocalCandidates(),
-                    )
-                ),
-            }
-        )
+                }
+            )
 
-        remoteIceParameters = RTCIceParameters(
-            usernameFragment=message["ice"]["usernameFragment"],
-            password=message["ice"]["password"],
-        )
-        remoteDtlsParameters = RTCDtlsParameters(
-            fingerprints=list(
-                map(
-                    lambda fp: RTCDtlsFingerprint(
-                        algorithm=fp["algorithm"], value=fp["value"]
-                    ),
-                    message["dtls"]["fingerprints"],
+            remoteIceParameters = RTCIceParameters(
+                usernameFragment=message["ice"]["usernameFragment"],
+                password=message["ice"]["password"],
+            )
+            remoteDtlsParameters = RTCDtlsParameters(
+                fingerprints=list(
+                    map(
+                        lambda fp: RTCDtlsFingerprint(
+                            algorithm=fp["algorithm"], value=fp["value"]
+                        ),
+                        message["dtls"]["fingerprints"],
+                    )
                 )
             )
-        )
 
-        gatherer = websocket.state.iceTransport.iceGatherer
-        await gatherer.gather()
+            await iceTransport.iceGatherer.gather()
 
-        websocket.state.iceTransport._connection.ice_controlling = False
+            iceTransport._connection.ice_controlling = False
 
-        await websocket.state.iceTransport.start(remoteIceParameters)
-        await websocket.state.dtlsTransport.start(remoteDtlsParameters)
+            await iceTransport.start(remoteIceParameters)
+            await dtlsTransport.start(remoteDtlsParameters)
+            self.encoding = "bytes"
+        elif self.encoding == "bytes":
+            await websocket.state.dtlsTransport._send_rtp(message)
+        else:
+            print("Unhandled encoding", self.encoding)
 
     async def on_disconnect(self, websocket, close_code):
         await websocket.state.dtlsTransport.stop()

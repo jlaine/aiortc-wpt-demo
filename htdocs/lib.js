@@ -45,14 +45,16 @@ async function connect(pc) {
         'o=- 166855176514521964 2 IN IP4 127.0.0.1\r\n' +
         's=-\r\n' +
         't=0 0\r\n' +
-        'm=video 9 UDP/TLS/RTP/SAVPF 100\r\n' +
+        'm=video 9 UDP/TLS/RTP/SAVPF 100 101\r\n' +
         'c=IN IP4 0.0.0.0\r\n' +
         'a=rtcp:9 IN IP4 0.0.0.0\r\n' +
         'a=mid:0\r\n' +
         'a=sendrecv\r\n' +
         'a=rtcp-mux\r\n' +
         'a=rtcp-rsize\r\n' +
-        'a=rtpmap:100 VP8/90000\r\n';
+        'a=rtpmap:100 VP8/90000\r\n' +
+        'a=rtpmap:101 rtx/90000\r\n' +
+        'a=fmtp:101 apt=100\r\n';
     sdp += SDPUtils.writeDtlsParameters(parameters.dtls, 'active');
     sdp += SDPUtils.writeIceParameters(parameters.ice);
     parameters.candidates.forEach(c => sdp += 'a=' + c + '\r\n');

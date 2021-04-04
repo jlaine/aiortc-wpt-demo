@@ -1,0 +1,97 @@
+<html>
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="timeout" content="long"/>
+    <title>WebRTC WPT demo</title>
+    <script src="https://wpt.live/resources/testharness.js"></script>
+    <script src="https://wpt.live/resources/testharnessreport.js"></script>
+    <script src="https://wpt.live/webrtc/third_party/sdp/sdp.js"></script>
+    <script src="lib.js"></script>
+</head>
+<body>
+<script>
+promise_test(async (t) => {
+    const pc = new RTCPeerConnection();
+    t.add_cleanup(() => pc.close());
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: true
+    });
+    t.add_cleanup(() => stream.getTracks().forEach(t => t.stop()));
+    stream.getTracks().forEach((track) => {
+        pc.addTrack(track, stream);
+    });
+
+    const ws = await connect(pc);
+    t.add_cleanup(() => ws.close());
+
+    // Wait for the first non-padding RTP packet.
+    const packet =  await (new Promise((resolve) => {
+        ws.addEventListener('message', function listener(message) {
+            if (isRTCP(message.data)) {
+                return;
+            }
+            const rtpData = new RTP(message.data);
+            if (rtpData.padding) {
+                return;
+            }
+            ws.removeEventListener('message', listener);
+            resolve(rtpData);
+        });
+    }));
+    assert_true(true, 'Received RTP packet');
+
+    // Construct a NACK with the packets SSRC and sequence number.
+    // https://tools.ietf.org/html/rfc4585#section-6.2.1
+    const nack = new Uint8Array([ // a nack
+        0x81, 0xcd, 0x00, 0x03,
+        0x00, 0x00, 0x00, 0x01, // sender SSRC, 0x01.
+        0x00, 0x00, 0x00, 0x00, // media SSRC.
+        0x00, 0x00, // first sequence number lost.
+        0x00, 0x00, // bitmask, set to 0.
+    ]);
+    const view = new DataView(nack.buffer);
+    view.setUint32(8, packet.synchronizationSource);
+    view.setUint16(12, packet.sequenceNumber)
+    ws.send(nack);
+    assert_true(true, 'Sent NACK');
+
+    // Wait for the packet that gets resent using RTX.
+    await (new Promise(async (resolve, reject) => {
+        ws.addEventListener('message', function listener(message) {
+            if (isRTCP(message.data)) {
+                return;
+            }
+            const rtpData = new RTP(message.data);
+            if (rtpData.payloadType !== 101) {
+                return;
+            }
+            if (rtpData.payload.byteLength < 2) {
+                return;
+            }
+            // https://tools.ietf.org/html/rfc4588#section-4
+            const osn = rtpData.payload.getUint16(0);
+            if (osn === packet.sequenceNumber) {
+                resolve();
+            }
+        });
+    }));
+    assert_true(true, 'Received RTX resend');
+
+    // TODO: this has shown up a result with nackCount 0 a couple of times.
+    // This might be due to getStats caching so wait 100ms.
+    await (new Promise(r => setTimeout(r, 100)));
+
+    const stats = await pc.getSenders()[0].getStats();
+    let nackCount = -1;
+    stats.forEach(report => {
+        if (report.type === 'outbound-rtp') {
+            nackCount = report.nackCount;
+        }
+    });
+    assert_equals(nackCount, 1, 'nackCount shows received NACK');
+}, 'NACK behaviour');
+</script>
+</body>
+</html>
